@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>共享文件服务器读取权限 · 离线诊断</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #24334d; --line: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --ok: #22c55e; --bad: #ef4444; --warn: #f59e0b; --link: #a78bfa;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.55;
+  }
+  header {
+    padding: 18px 24px 14px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #16233d, #0f172a);
+  }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  .wrap { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.2fr); gap: 16px; padding: 16px 24px 32px; }
+  @media (max-width: 1080px) { .wrap { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .panel h2 { margin: 0; padding: 12px 16px; font-size: 15px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+  .panel .body { padding: 14px 16px; }
+  label.field { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  textarea {
+    width: 100%; min-height: 260px; resize: vertical; background: #0b1220; color: #dbeafe;
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.5; tab-size: 2;
+  }
+  textarea:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    background: var(--accent); color: #082f49; border: 0; border-radius: 8px;
+    padding: 8px 14px; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  button:hover { filter: brightness(1.1); }
+  select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; max-width: 100%;
+  }
+  .verdict { border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--line); }
+  .verdict.ok { background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.5); }
+  .verdict.bad { background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.55); }
+  .verdict h3 { margin: 0 0 6px; font-size: 16px; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; margin-right: 8px; }
+  .badge.ok { background: var(--ok); color: #052e16; }
+  .badge.bad { background: var(--bad); color: #450a0a; }
+  .badge.warn { background: var(--warn); color: #451a03; }
+  .badge.link { background: var(--link); color: #2e1065; }
+  .steps { display: flex; flex-direction: column; gap: 8px; }
+  .step { border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 9px 12px; background: #172236; }
+  .step.start, .step.done { border-left-color: var(--accent); }
+  .step.traverse, .step.parent { border-left-color: #64748b; }
+  .step.symlink { border-left-color: var(--link); }
+  .step.permission_check.ok-step { border-left-color: var(--ok); }
+  .step.permission_check.fail-step { border-left-color: var(--bad); }
+  .step.error { border-left-color: var(--bad); background: rgba(239,68,68,.08); }
+  .step .t { font-weight: 600; font-size: 13px; }
+  .step .d { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .step .meta { font-family: var(--mono); font-size: 11.5px; color: #7dd3fc; margin-top: 4px; }
+  code, .mono { font-family: var(--mono); }
+  .perm-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .perm-table th, .perm-table td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; }
+  .perm-table th { background: var(--panel2); color: var(--muted); font-weight: 600; }
+  .granted { color: var(--ok); font-weight: 700; }
+  .denied { color: var(--bad); font-weight: 700; }
+  .errbox { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.5); border-radius: 10px; padding: 12px 14px; }
+  .errbox .loc { font-family: var(--mono); color: #fca5a5; word-break: break-all; }
+  .warnbox { background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.45); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; }
+  .warnbox li { margin: 3px 0; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 12.5px; margin-top: 6px; }
+  .kv .k { color: var(--muted); }
+  .scroll { max-height: 560px; overflow-y: auto; padding-right: 4px; }
+  .desc { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  .pill { font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>共享文件服务器 · 读取权限离线诊断台</h1>
+  <p>在浏览器编辑运维采集的目录快照 JSON 与读取请求，按 Linux 无特权进程规则逐级模拟 namei 解析与 DAC/POSIX ACL 判定。全程仅在内存计算，<b>不访问宿主机任何文件</b>。</p>
+</header>
+
+<div class="wrap">
+  <!-- ================= 左：输入 ================= -->
+  <section class="panel">
+    <h2>① 选择示例 / 编辑输入</h2>
+    <div class="body">
+      <label class="field">可编辑示例（载入后可任意修改 JSON 再诊断）</label>
+      <div class="row">
+        <select id="exampleSelect" style="flex:1"></select>
+        <button class="secondary" id="loadBtn" type="button">载入</button>
+      </div>
+      <p class="desc" id="exampleDesc"></p>
+
+      <label class="field">目录快照 snapshot（≤100 节点；含 path/type/uid/gid/mode，可选 acl、link_target、users、groups）</label>
+      <textarea id="snapshotInput" spellcheck="false"></textarea>
+      <div class="row" style="margin-top:6px">
+        <button class="secondary" type="button" id="fmtSnap">格式化快照</button>
+        <button class="secondary" type="button" id="validateBtn">仅校验快照</button>
+        <span class="hint" id="validateMsg"></span>
+      </div>
+
+      <label class="field">读取请求 request（uid 为非 0 正整数）</label>
+      <textarea id="requestInput" spellcheck="false" style="min-height:150px"></textarea>
+
+      <div class="row" style="margin-top:12px">
+        <button id="runBtn" type="button">▶ 运行诊断</button>
+        <button class="secondary" type="button" id="fmtReq">格式化请求</button>
+        <span class="hint">错误会精确定位到 JSON 字段路径</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 右：结果 ================= -->
+  <section class="panel">
+    <h2>② 诊断结论与逐步解析</h2>
+    <div class="body scroll" id="resultPane">
+      <p class="hint">点击「运行诊断」后，这里会展示：能否读取、首个失败原因与分类、实际解析步骤、每一步采用的权限项。</p>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let EXAMPLES = [];
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadExamples() {
+  const r = await fetch("/api/examples");
+  const data = await r.json();
+  EXAMPLES = data.examples;
+  const sel = $("exampleSelect");
+  sel.innerHTML = EXAMPLES.map((e, i) => `<option value="${i}">${esc(e.name)}</option>`).join("");
+  sel.addEventListener("change", () => loadExample(sel.value));
+  $("loadBtn").addEventListener("click", () => loadExample(sel.value));
+  loadExample(0);
+}
+
+function loadExample(i) {
+  const ex = EXAMPLES[i];
+  $("snapshotInput").value = JSON.stringify(ex.snapshot, null, 2);
+  $("requestInput").value = JSON.stringify(ex.request, null, 2);
+  $("exampleDesc").textContent = ex.description || "";
+  $("validateMsg").textContent = "";
+  $("resultPane").innerHTML = `<p class="hint">已载入「${esc(ex.name)}」，可编辑后运行诊断。</p>`;
+}
+
+function parseTextarea(id) {
+  const raw = $(id).value;
+  try { return { ok: true, data: JSON.parse(raw) }; }
+  catch (e) {
+    const m = /position (\d+)/.exec(e.message);
+    let loc = "";
+    if (m) {
+      const pos = Number(m[1]);
+      const before = raw.slice(0, pos);
+      const line = before.split("\n").length;
+      const col = pos - before.lastIndexOf("\n");
+      loc = `（第 ${line} 行第 ${col} 列附近）`;
+    }
+    return { ok: false, error: `JSON 语法错误${loc}：${e.message}` };
+  }
+}
+
+function formatArea(id, label) {
+  const p = parseTextarea(id);
+  if (!p.ok) { alert(`【${label}】${p.error}`); return; }
+  $(id).value = JSON.stringify(p.data, null, 2);
+}
+
+function renderError(err) {
+  return `<div class="errbox">
+      <h3 style="margin:0 0 6px">❌ ${esc(err.error_type === "snapshot_error" ? "快照无效" : "请求无效")}</h3>
+      <div>${esc(err.message)}</div>
+      <div class="loc" style="margin-top:6px">定位：${esc(err.loc_text)}</div>
+    </div>`;
+}
+
+function verdictBadge(category) {
+  const map = {
+    ok: ["ok", "允许读取"],
+    permission_denied: ["bad", "权限不足 EACCES"],
+    path_missing: ["bad", "路径缺失 ENOENT"],
+    link_limit_exceeded: ["link", "链接超限 ELOOP"],
+    not_regular: ["warn", "非普通文件 / ENOTDIR"],
+  };
+  const [cls, txt] = map[category] || ["bad", category];
+  return `<span class="badge ${cls}">${txt}</span>`;
+}
+
+function permTable(decision) {
+  if (!decision) return "";
+  const rows = decision.considered.map((c) => `
+    <tr>
+      <td>${esc(c.label)}</td>
+      <td class="mono">${esc(c.raw_perms)}${c.mask_perms ? ` &amp; mask ${esc(c.mask_perms)}` : ""}</td>
+      <td class="mono">${esc(c.effective_perms)}</td>
+      <td>${c.matched_identity ? '<span class="granted">身份命中</span>' : '<span class="hint">未命中</span>'}</td>
+    </tr>`).join("");
+  return `<table class="perm-table">
+      <thead><tr><th>候选权限项</th><th>原始/约束</th><th>有效权限</th><th>身份匹配</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="hint" style="margin-top:5px">
+      采用项有效权限 <b class="mono">${esc(decision.effective_perms)}</b>，
+      需要 <b class="mono">${esc(decision.wanted_perms)}</b>，
+      判定：${decision.granted ? '<span class="granted">通过</span>' : '<span class="denied">拒绝</span>'}
+      （${decision.acl_used ? "POSIX ACL 模式" : "经典 mode 模式"}）
+    </div>`;
+}
+
+function renderStep(s, idx) {
+  const cls = s.kind === "permission_check" ? `permission_check ${s.ok ? "ok-step" : "fail-step"}` : s.kind;
+  const icon = s.kind === "error" ? "⛔" : s.kind === "symlink" ? "🔗" : s.kind === "done" ? "✅" : s.kind === "permission_check" ? (s.ok ? "✅" : "⛔") : "📁";
+  let extra = "";
+  if (s.kind === "permission_check") extra = permTable(s.decision);
+  if (s.node) {
+    const n = s.node;
+    extra += `<div class="kv">
+      <span class="k">节点</span><span class="mono">${esc(n.path)} [${esc(n.type)}]</span>
+      <span class="k">属主/组</span><span class="mono">${esc(n.owner_name || "#" + n.uid)}(${n.uid}) : ${esc(n.group_name || "#" + n.gid)}(${n.gid})</span>
+      <span class="k">mode</span><span class="mono">${esc(n.mode)}${n.has_acl ? " + ACL" : ""}</span>
+      ${n.link_target ? `<span class="k">链接目标</span><span class="mono">${esc(n.link_target)}</span>` : ""}
+    </div>`;
+  }
+  const meta = [];
+  if (s.cwd !== undefined) meta.push(`cwd=${s.cwd || "/"}`);
+  if (s.component) meta.push(`component=${s.component}`);
+  if (s.symlink_follows) meta.push(`follows=${s.symlink_follows}`);
+  return `<div class="step ${cls}">
+      <div class="t">${idx}. ${icon} ${esc(s.title)}</div>
+      <div class="d">${esc(s.detail || "")}</div>
+      ${meta.length ? `<div class="meta">${esc(meta.join(" ｜ "))}</div>` : ""}
+      ${extra}
+    </div>`;
+}
+
+function renderResult(res) {
+  const head = `<div class="verdict ${res.readable ? "ok" : "bad"}">
+      <h3>${verdictBadge(res.category)}${res.readable ? "可以读取该普通文件" : "读取被阻止"}</h3>
+      <div>${esc(res.message)}</div>
+      <div class="kv">
+        <span class="k">软链接跟随</span><span class="mono">${res.symlink_follows} 次（上限 40）</span>
+        <span class="k">最终节点</span><span class="mono">${res.final_node ? esc(res.final_node.path) + " [" + esc(res.final_node.type) + "]" : "未到达"}</span>
+        ${res.first_failure ? `<span class="k">首个失败</span><span><span class="pill">${esc(res.first_failure.errno)}</span> ${esc(res.first_failure.step_title || "")}（步骤 #${res.first_failure.step_index}）</span>` : ""}
+      </div>
+    </div>`;
+
+  let warn = "";
+  if (res.snapshot_warnings && res.snapshot_warnings.length) {
+    warn = `<div class="warnbox"><b>⚠ 快照告警（不影响运行）</b><ul>${res.snapshot_warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
+  }
+
+  const steps = `<div class="steps">${res.steps.map((s, i) => renderStep(s, i)).join("")}</div>`;
+  return head + warn + steps;
+}
+
+async function postJSON(url, body) {
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  return { status: r.status, data: await r.json() };
+}
+
+$("runBtn").addEventListener("click", async () => {
+  const sp = parseTextarea("snapshotInput");
+  if (!sp.ok) { $("resultPane").innerHTML = renderError({ error_type: "snapshot_error", message: sp.error, loc_text: "$.snapshot" }); return; }
+  const rp = parseTextarea("requestInput");
+  if (!rp.ok) { $("resultPane").innerHTML = renderError({ error_type: "request_error", message: rp.error, loc_text: "$.request" }); return; }
+  $("resultPane").innerHTML = `<p class="hint">诊断中…</p>`;
+  const { data } = await postJSON("/api/diagnose", { snapshot: sp.data, request: rp.data });
+  $("resultPane").innerHTML = data.ok ? renderResult(data.result) : renderError(data);
+});
+
+$("validateBtn").addEventListener("click", async () => {
+  const sp = parseTextarea("snapshotInput");
+  if (!sp.ok) { $("validateMsg").textContent = sp.error; return; }
+  const { data } = await postJSON("/api/validate-snapshot", { snapshot: sp.data });
+  if (data.ok) {
+    $("validateMsg").innerHTML = `<span class="granted">✓ 有效：${data.node_count} 个节点${data.warnings.length ? `，${data.warnings.length} 条告警` : ""}</span>`;
+    if (data.warnings.length) alert("快照有效但有告警：\n\n- " + data.warnings.join("\n- "));
+  } else {
+    $("resultPane").innerHTML = renderError(data);
+    $("validateMsg").textContent = "无效，见右侧定位";
+  }
+});
+
+$("fmtSnap").addEventListener("click", () => formatArea("snapshotInput", "快照"));
+$("fmtReq").addEventListener("click", () => formatArea("requestInput", "请求"));
+
+loadExamples();
+</script>
+</body>
+</html>

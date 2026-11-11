@@ -1,0 +1,19 @@
+services:
+  perm-diag:
+    build: .
+    image: perm-diag:latest
+    container_name: perm-diag
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    # 不挂载任何宿主卷：诊断完全基于浏览器提交的 JSON 快照
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5

@@ -1,0 +1,129 @@
+{
+  "examples": [
+    {
+      "id": "owner-acl-deny",
+      "name": "示例1：属主有 r，但目录不可搜索（最常见误判）",
+      "description": "文件本身 mode 644、属主可读，但上级目录 /data/shared 对该用户没有 x 位，open 在路径解析阶段就被 EACCES 挡住——“文件有读权限却打不开”。",
+      "snapshot": {
+        "users": {"1001": "alice", "0": "root"},
+        "groups": {"1001": "alice", "100": "users", "1000": "staff"},
+        "nodes": [
+          {"path": "/", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/data", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/data/shared", "type": "directory", "uid": 0, "gid": 1000, "mode": "700"},
+          {"path": "/data/shared/report.csv", "type": "file", "uid": 1001, "gid": 1001, "mode": "644"}
+        ]
+      },
+      "request": {"uid": 1001, "gid": 1001, "supp_groups": [100], "path": "/data/shared/report.csv"}
+    },
+    {
+      "id": "acl-mask-named-user",
+      "name": "示例2：ACL 命名用户被 mask 限制，命中后不退回 other",
+      "description": "bob 在 ACL 中被显式授权 rwx，但 mask 只有 r--，有效权限只剩 r--；读取应放行。把 mask 改成 --- 即可看到命名用户命中后依然不退回 other 的拒绝。",
+      "snapshot": {
+        "users": {"1002": "bob", "0": "root"},
+        "groups": {"0": "root", "1002": "bob"},
+        "nodes": [
+          {"path": "/", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/srv", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/srv/acl", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {
+            "path": "/srv/acl/secret.txt",
+            "type": "file",
+            "uid": 0,
+            "gid": 0,
+            "mode": "640",
+            "acl": [
+              {"type": "user_obj", "perms": "rw-"},
+              {"type": "user", "qualifier": 1002, "perms": "rwx"},
+              {"type": "group_obj", "perms": "r--"},
+              {"type": "mask", "perms": "r--"},
+              {"type": "other", "perms": "---"}
+            ]
+          }
+        ]
+      },
+      "request": {"uid": 1002, "gid": 1002, "supp_groups": [], "path": "/srv/acl/secret.txt"}
+    },
+    {
+      "id": "symlink-relative-dotdot",
+      "name": "示例3：软链接 + 物理 ..（不做词法折叠）",
+      "description": "/home/alice/link 是相对软链接 ../bob/secret，解析后物理目录为 /home/bob；随后的 .. 回到 /home 而不是 /home/alice。alice 对 /home/bob 无 x 权限，在链接展开后的搜索检查处被拒。",
+      "snapshot": {
+        "users": {"1001": "alice", "1003": "bob", "0": "root"},
+        "groups": {"1001": "alice", "1003": "bob", "0": "root"},
+        "nodes": [
+          {"path": "/", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/home", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/home/alice", "type": "directory", "uid": 1001, "gid": 1001, "mode": "750"},
+          {"path": "/home/bob", "type": "directory", "uid": 1003, "gid": 1003, "mode": "700"},
+          {"path": "/home/bob/secret", "type": "directory", "uid": 1003, "gid": 1003, "mode": "700"},
+          {"path": "/home/bob/secret/key.txt", "type": "file", "uid": 1003, "gid": 1003, "mode": "644"},
+          {"path": "/home/alice/link", "type": "symlink", "uid": 1001, "gid": 1001, "mode": "777", "link_target": "../bob/secret"},
+          {"path": "/home/alice/link/key.txt", "type": "file", "uid": 1003, "gid": 1003, "mode": "644"}
+        ]
+      },
+      "request": {"uid": 1001, "gid": 1001, "supp_groups": [], "path": "/home/alice/link/key.txt"}
+    },
+    {
+      "id": "eloop-40",
+      "name": "示例4：软链接循环，第 41 次触发 ELOOP",
+      "description": "a -> b、b -> a 构成循环。Linux MAXSYMLINKS=40，第 40 次仍允许展开，第 41 次返回 ELOOP，分类为 link_limit_exceeded。",
+      "snapshot": {
+        "users": {"1001": "alice", "0": "root"},
+        "groups": {"1001": "alice", "0": "root"},
+        "nodes": [
+          {"path": "/", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/loop", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/loop/a", "type": "symlink", "uid": 0, "gid": 0, "mode": "777", "link_target": "b"},
+          {"path": "/loop/b", "type": "symlink", "uid": 0, "gid": 0, "mode": "777", "link_target": "a"}
+        ]
+      },
+      "request": {"uid": 1001, "gid": 1001, "supp_groups": [], "path": "/loop/a"}
+    },
+    {
+      "id": "group-union-and-other-no-fallback",
+      "name": "示例5：多组权限并集 + 命中组不退回 other",
+      "description": "文件对命名组 ops 只给 --x、对文件组给 r--，进程同时在两个组里，并集为 r-x 经 mask 后可读。对比：删除 ops 组成员关系后组条目仍命中文件组；若把两个组授权都删掉，则因组身份仍命中而不能使用 other 的 r。",
+      "snapshot": {
+        "users": {"1004": "carol", "0": "root"},
+        "groups": {"1004": "carol", "2000": "ops", "2001": "dev", "0": "root"},
+        "nodes": [
+          {"path": "/", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/eng", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {
+            "path": "/eng/runbook.txt",
+            "type": "file",
+            "uid": 0,
+            "gid": 2001,
+            "mode": "640",
+            "acl": [
+              {"type": "user_obj", "perms": "rw-"},
+              {"type": "group_obj", "perms": "r--"},
+              {"type": "group", "qualifier": 2000, "perms": "--x"},
+              {"type": "mask", "perms": "rwx"},
+              {"type": "other", "perms": "r--"}
+            ]
+          }
+        ]
+      },
+      "request": {"uid": 1004, "gid": 1004, "supp_groups": [2000, 2001], "path": "/eng/runbook.txt"}
+    },
+    {
+      "id": "not-regular-and-missing",
+      "name": "示例6：非普通文件 / 路径缺失 的区分",
+      "description": "/dev/null 是字符设备（type=other），读取请求返回 not_regular 而非权限错误；/data/gone.txt 不在快照中返回 path_missing（ENOENT）。可切换请求 path 观察两种分类。",
+      "snapshot": {
+        "users": {"1001": "alice", "0": "root"},
+        "groups": {"1001": "alice", "0": "root"},
+        "nodes": [
+          {"path": "/", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/dev", "type": "directory", "uid": 0, "gid": 0, "mode": "755"},
+          {"path": "/dev/null", "type": "other", "uid": 0, "gid": 0, "mode": "666"},
+          {"path": "/data", "type": "directory", "uid": 0, "gid": 0, "mode": "755"}
+        ]
+      },
+      "request": {"uid": 1001, "gid": 1001, "supp_groups": [], "path": "/dev/null"}
+    }
+  ]
+}
