@@ -1,0 +1,152 @@
+{
+  "examples": [
+    {
+      "id": "sshd-requisite-die",
+      "name": "示例1：requisite 失败立即 die，后续模块全部跳过",
+      "description": "pam_env 成功后，pam_deny 以 requisite 返回 auth_err：requisite 的默认动作是 die，当前栈立即终止，pam_permit 不再被调用，最终 PAM 返回 auth_err（认证失败）。把第 2 行返回码改成 success 即可看到放行。",
+      "payload": {
+        "entry": "sshd",
+        "files": [
+          {
+            "name": "sshd",
+            "content": "auth required pam_env.so\nauth requisite pam_deny.so\nauth required pam_permit.so\n"
+          }
+        ],
+        "returns": [
+          {"file": "sshd", "line": 1, "return": "success"},
+          {"file": "sshd", "line": 2, "return": "auth_err"},
+          {"file": "sshd", "line": 3, "return": "success"}
+        ]
+      }
+    },
+    {
+      "id": "sufficient-shortcut",
+      "name": "示例2：sufficient 成功即 done 短路放行",
+      "description": "pam_unix 以 sufficient 返回 success，动作是 done：立即结束整个 auth 栈并返回 success，后面的 pam_deny 被跳过，认证通过。若把第 1 行改成 auth_err，sufficient 对失败按 ignore 处理，会继续走到 pam_deny 而拒绝。",
+      "payload": {
+        "entry": "sshd",
+        "files": [
+          {
+            "name": "sshd",
+            "content": "auth sufficient pam_unix.so\nauth required pam_deny.so\n"
+          }
+        ],
+        "returns": [
+          {"file": "sshd", "line": 1, "return": "success"},
+          {"file": "sshd", "line": 2, "return": "auth_err"}
+        ]
+      }
+    },
+    {
+      "id": "substack-die-isolation",
+      "name": "示例3：子栈（substack）隔离——内部 die 不杀父栈，结果按 required 回并",
+      "description": "sshd 通过 substack 进入 password-auth。子栈内 pam_deny 以 requisite 返回 auth_err 触发 die，但 die 只终止子栈；父栈的 pam_permit 仍会执行。子栈终态 auth_err 按 required 语义作为一次 bad 回并父栈，首个失败优先，最终仍认证失败。把 password-auth 第 1 行改成 success 可观察子栈成功回并后整体放行。",
+      "payload": {
+        "entry": "sshd",
+        "files": [
+          {
+            "name": "sshd",
+            "content": "auth substack password-auth\nauth required pam_permit.so\n"
+          },
+          {
+            "name": "password-auth",
+            "content": "auth requisite pam_deny.so\nauth required pam_permit.so\n"
+          }
+        ],
+        "returns": [
+          {"file": "sshd", "line": 2, "return": "success"},
+          {"file": "password-auth", "line": 1, "return": "auth_err"},
+          {"file": "password-auth", "line": 2, "return": "success"}
+        ]
+      }
+    },
+    {
+      "id": "include-flatten-reset",
+      "name": "示例4：include 文本内联无状态边界，reset 恢复到顶层初始状态",
+      "description": "include 不建立新栈级，common-auth 被直接内联进 sshd。第 1 行 pam_permit 已积累正向 success，但内联进来的 pam_unix 返回 auth_err 触发 reset：由于没有子栈边界，reset 恢复的是顶层初始状态（undef/auth_err），先前的成功被清空。对照示例6 可看到 substack 下 reset 的不同恢复边界。",
+      "payload": {
+        "entry": "sshd",
+        "files": [
+          {
+            "name": "sshd",
+            "content": "auth required pam_permit.so\nauth include common-auth\nauth required pam_deny.so\n"
+          },
+          {
+            "name": "common-auth",
+            "content": "auth [auth_err=reset default=ok] pam_unix.so\n"
+          }
+        ],
+        "returns": [
+          {"file": "sshd", "line": 1, "return": "success"},
+          {"file": "sshd", "line": 3, "return": "auth_err"},
+          {"file": "common-auth", "line": 1, "return": "auth_err"}
+        ]
+      }
+    },
+    {
+      "id": "bracket-jump-substack-unit",
+      "name": "示例5：方括号跳转——整个 substack 只算一个跳转单元",
+      "description": "第 1 行 [success=2 default=bad] 在 success 时向前跳过 2 个同栈级单元：第 2 行的整个 substack（含其全部子模块）算 1 个单元，第 3 行 pam_deny 算第 2 个，落点是第 4 行 pam_permit，认证通过。把跳转数改成 5 再运行，可看到越过栈尾的 bad jump 被强制改判失败。",
+      "payload": {
+        "entry": "sshd",
+        "files": [
+          {
+            "name": "sshd",
+            "content": "auth [success=2 default=bad] pam_succeed_if.so\nauth substack common-auth\nauth required pam_deny.so\nauth required pam_permit.so\n"
+          },
+          {
+            "name": "common-auth",
+            "content": "auth required pam_permit.so\n"
+          }
+        ],
+        "returns": [
+          {"file": "sshd", "line": 1, "return": "success"},
+          {"file": "sshd", "line": 3, "return": "auth_err"},
+          {"file": "sshd", "line": 4, "return": "success"},
+          {"file": "common-auth", "line": 1, "return": "success"}
+        ]
+      }
+    },
+    {
+      "id": "reset-substack-boundary",
+      "name": "示例6：substack 内 reset 恢复进入子栈时保存的边界状态",
+      "description": "父栈先由 pam_permit 积累正向 success，进入 substack 时该状态被保存为子栈边界。common-auth 中 pam_unix 返回 auth_err 触发 reset，子栈状态恢复为进入时的 positive/success（而非顶层初始状态）；随后 pam_ldap success 以 sufficient 的 done 结束子栈，子栈回并 success，整体认证通过。",
+      "payload": {
+        "entry": "sshd",
+        "files": [
+          {
+            "name": "sshd",
+            "content": "auth required pam_permit.so\nauth substack common-auth\nauth required pam_permit.so\n"
+          },
+          {
+            "name": "common-auth",
+            "content": "auth [auth_err=reset default=ok] pam_unix.so\nauth sufficient pam_ldap.so\n"
+          }
+        ],
+        "returns": [
+          {"file": "sshd", "line": 1, "return": "success"},
+          {"file": "sshd", "line": 3, "return": "success"},
+          {"file": "common-auth", "line": 1, "return": "auth_err"},
+          {"file": "common-auth", "line": 2, "return": "success"}
+        ]
+      }
+    },
+    {
+      "id": "missing-reference-error",
+      "name": "示例7：缺失引用被定位拒绝（用于演示错误定位，运行即报错）",
+      "description": "sshd 第 2 行 include 了未提交的 system-auth，分析在展开阶段即被拒绝并给出文件名与行号定位，且不会产生任何旧的分析结果。补传一份名为 system-auth 的配置即可消除该错误。",
+      "payload": {
+        "entry": "sshd",
+        "files": [
+          {
+            "name": "sshd",
+            "content": "auth required pam_permit.so\nauth include system-auth\n"
+          }
+        ],
+        "returns": [
+          {"file": "sshd", "line": 1, "return": "success"}
+        ]
+      }
+    }
+  ]
+}

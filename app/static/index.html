@@ -88,6 +88,11 @@
 <header>
   <h1>共享文件服务器 · 读取权限离线诊断台</h1>
   <p>在浏览器编辑运维采集的目录快照 JSON 与读取请求，按 Linux 无特权进程规则逐级模拟 namei 解析与 DAC/POSIX ACL 判定。全程仅在内存计算，<b>不访问宿主机任何文件</b>。</p>
+  <div style="margin-top:8px;display:flex;gap:14px;font-size:13px">
+    <a href="/" style="color:var(--accent);text-decoration:none">文件读取权限诊断（当前）</a>
+    <a href="/pam" style="color:var(--link);text-decoration:none">🔐 PAM 认证栈（auth）诊断</a>
+    <a href="/docs" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">OpenAPI</a>
+  </div>
 </header>
 
 <div class="wrap">

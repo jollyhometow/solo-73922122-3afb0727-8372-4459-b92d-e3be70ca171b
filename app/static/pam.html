@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PAM 认证栈（auth）· 离线诊断</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #24334d; --line: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --ok: #22c55e; --bad: #ef4444; --warn: #f59e0b; --link: #a78bfa;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.55;
+  }
+  header {
+    padding: 18px 24px 14px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #16233d, #0f172a);
+  }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  .nav { margin-top: 8px; display: flex; gap: 14px; font-size: 13px; }
+  .nav a { color: var(--accent); text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+  .wrap { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(440px, 1.25fr); gap: 16px; padding: 16px 24px 32px; }
+  @media (max-width: 1120px) { .wrap { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .panel h2 { margin: 0; padding: 12px 16px; font-size: 15px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+  .panel .body { padding: 14px 16px; }
+  label.field { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  textarea, input[type=text] {
+    width: 100%; background: #0b1220; color: #dbeafe;
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  }
+  textarea { min-height: 150px; resize: vertical; tab-size: 2; }
+  textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    background: var(--accent); color: #082f49; border: 0; border-radius: 8px;
+    padding: 8px 14px; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  button.danger { background: rgba(239,68,68,.18); color: #fca5a5; border: 1px solid rgba(239,68,68,.4); padding: 4px 9px; }
+  button:hover { filter: brightness(1.1); }
+  select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; max-width: 100%;
+  }
+  .fileblock { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 12px; background: #172236; }
+  .fileblock .head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .fileblock .head input { flex: 1; }
+  .fileblock textarea { min-height: 120px; }
+  .tag { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .retrow { display: grid; grid-template-columns: 1fr 90px 130px auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .retrow input, .retrow select { width: 100%; }
+  .verdict { border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--line); }
+  .verdict.ok { background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.5); }
+  .verdict.bad { background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.55); }
+  .verdict h3 { margin: 0 0 6px; font-size: 16px; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; margin-right: 8px; }
+  .badge.ok { background: var(--ok); color: #052e16; }
+  .badge.bad { background: var(--bad); color: #450a0a; }
+  .badge.warn { background: var(--warn); color: #451a03; }
+  .badge.link { background: var(--link); color: #2e1065; }
+  .steps { display: flex; flex-direction: column; gap: 8px; }
+  .step { border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 9px 12px; background: #172236; }
+  .step.module { border-left-color: var(--accent); }
+  .step.substack_enter { border-left-color: var(--link); }
+  .step.substack_return { border-left-color: var(--link); }
+  .step .t { font-weight: 600; font-size: 13px; }
+  .step .d { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .step .meta { font-family: var(--mono); font-size: 11.5px; color: #7dd3fc; margin-top: 4px; }
+  code, .mono { font-family: var(--mono); }
+  .errbox { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.5); border-radius: 10px; padding: 12px 14px; }
+  .errbox .loc { font-family: var(--mono); color: #fca5a5; word-break: break-all; }
+  .warnbox { background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.45); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; }
+  .warnbox li { margin: 3px 0; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; font-size: 12.5px; margin-top: 6px; }
+  .kv .k { color: var(--muted); }
+  .scroll { max-height: 640px; overflow-y: auto; padding-right: 4px; }
+  .pill { font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+  .pill.act-ok { color:#86efac; border-color:#22613a; }
+  .pill.act-bad, .pill.act-die { color:#fca5a5; border-color:#7f1d1d; }
+  .pill.act-done { color:#93c5fd; border-color:#1e40af; }
+  .pill.act-reset { color:#fcd34d; border-color:#92610c; }
+  .pill.act-ignore { color: var(--muted); }
+  .state { font-family: var(--mono); font-size: 11.5px; }
+  .state .pos { color: var(--ok); } .state .neg { color: var(--bad); } .state .und { color: var(--muted); }
+  .skip-item { border-left: 3px solid var(--warn); background: rgba(245,158,11,.07); border-radius: 6px; padding: 6px 10px; font-size: 12px; margin-bottom: 5px; }
+  .indent { margin-left: 18px; border-left: 2px dashed var(--line); padding-left: 12px; }
+  .src { color: #cbd5e1; }
+  .small { font-size: 11.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PAM 认证栈（auth）· 离线诊断台</h1>
+  <p>在浏览器编辑最多 8 份 <span class="mono">/etc/pam.d</span> 配置与每个模块行的返回码，按 Linux-PAM
+     <span class="mono">pam_authenticate</span> 语义模拟 required/requisite/sufficient/optional、
+     include/substack、方括号控制与跳转。<b>不加载任何模块、不访问宿主机文件</b>，仅分析 auth 管理组，单文件最多 60 行。</p>
+  <div class="nav">
+    <a href="/">← 文件读取权限诊断</a>
+    <a href="/pam">PAM 认证栈诊断（当前）</a>
+    <a href="/docs" target="_blank" rel="noopener">OpenAPI</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- ================= 左：输入 ================= -->
+  <section class="panel">
+    <h2>① 选择示例 / 编辑配置与返回码</h2>
+    <div class="body">
+      <label class="field">可编辑示例（载入后可任意修改）</label>
+      <div class="row">
+        <select id="exampleSelect" style="flex:1"></select>
+        <button class="secondary" id="loadBtn" type="button">载入</button>
+      </div>
+      <p class="desc hint" id="exampleDesc"></p>
+
+      <label class="field">入口服务 entry（/etc/pam.d 下的纯文件名，如 sshd）</label>
+      <input type="text" id="entryInput" value="sshd" spellcheck="false" />
+
+      <label class="field">PAM 配置文件（1–8 份，每份 ≤60 行；仅 auth 行参与分析）</label>
+      <div id="fileBlocks"></div>
+      <div class="row">
+        <button class="secondary" type="button" id="addFileBtn">＋ 增加配置文件</button>
+        <button class="secondary" type="button" id="scanBtn">从配置刷新返回码表</button>
+      </div>
+
+      <label class="field">模块返回码（按 文件名 + 行号 填写；仅限四值）</label>
+      <div id="returnsBox"></div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="runBtn" type="button">▶ 运行分析</button>
+        <span class="hint">非法输入/缺失引用/循环会被定位拒绝，并清空旧结果</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 右：结果 ================= -->
+  <section class="panel">
+    <h2>② PAM 返回码与逐步状态</h2>
+    <div class="body scroll" id="resultPane">
+      <p class="hint">点击「运行分析」后，这里展示：PAM 最终返回码、是否认证通过、每一步的累计状态、调用与跳过的源文件行号。</p>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const MAX_FILES = 8, MAX_LINES = 60;
+const RET_OPTS = ["success", "auth_err", "user_unknown", "ignore"];
+let EXAMPLES = [];
+let fileSeq = 0;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ----------------------------------------------------------------- 配置文件块
+function addFileBlock(name = "", content = "") {
+  const blocks = $("fileBlocks").querySelectorAll(".fileblock");
+  if (blocks.length >= MAX_FILES) { alert(`最多 ${MAX_FILES} 份配置`); return null; }
+  const id = "fb" + (++fileSeq);
+  const div = document.createElement("div");
+  div.className = "fileblock";
+  div.dataset.id = id;
+  div.innerHTML = `
+    <div class="head">
+      <span class="tag">/etc/pam.d/</span>
+      <input type="text" class="fb-name" placeholder="文件名，如 sshd / common-auth" spellcheck="false" />
+      <button type="button" class="danger fb-del">删除</button>
+    </div>
+    <textarea class="fb-content" spellcheck="false"
+      placeholder="auth required pam_permit.so"></textarea>
+    <div class="tag small line-count"></div>`;
+  div.querySelector(".fb-name").value = name;
+  div.querySelector(".fb-content").value = content;
+  div.querySelector(".fb-del").addEventListener("click", () => {
+    div.remove();
+    refreshReturnTable();
+  });
+  const ta = div.querySelector(".fb-content");
+  ta.addEventListener("input", () => updateLineCount(div));
+  updateLineCount(div);
+  $("fileBlocks").appendChild(div);
+  return div;
+}
+
+function updateLineCount(div) {
+  const n = div.querySelector(".fb-content").value.split("\n").length;
+  const el = div.querySelector(".line-count");
+  el.textContent = `共 ${n} 行（上限 ${MAX_LINES}）`;
+  el.style.color = n > MAX_LINES ? "#fca5a5" : "";
+}
+
+function collectFiles() {
+  return Array.from($("fileBlocks").querySelectorAll(".fileblock")).map((b) => ({
+    name: b.querySelector(".fb-name").value.trim(),
+    content: b.querySelector(".fb-content").value,
+  }));
+}
+
+// ----------------------------------------------------------------- 返回码表
+function parseAuthModuleLines(content) {
+  // 与后端一致：反斜杠续行合并，识别 auth 模块行，返回起始物理行号
+  const phys = content.split("\n");
+  const lines = [];
+  let buf = "", start = 1;
+  const flush = (no, text) => {
+    const t = text.trim();
+    if (!t || t.startsWith("#")) return;
+    let toks = t.split(/\s+/);
+    if (toks[0] === "@include") return;
+    if (toks[0].startsWith("-")) toks[0] = toks[0].slice(1) || toks[1];
+    if (toks[0] !== "auth") return;
+    // 找控制列
+    let ci = 1;
+    if (toks[1] && toks[1].startsWith("[") && !toks[1].endsWith("]")) {
+      while (ci < toks.length && !toks[ci].endsWith("]")) ci++;
+      ci++; // 控制列结束，下一列为模块
+    } else { ci = 2; }
+    const ctrl = toks[1];
+    if (ctrl === "include" || ctrl === "substack") return;
+    if (!toks[ci] || toks[ci].startsWith("[")) { /* 模块名列 */ }
+    if (toks[ci]) lines.push(no);
+  };
+  phys.forEach((raw0, i) => {
+    const raw = raw0.replace(/\r$/, "");
+    if (buf) {
+      if (raw.endsWith("\\")) buf += " " + raw.slice(0, -1).trim();
+      else { buf += " " + raw.trim(); flush(start, buf); buf = ""; }
+      return;
+    }
+    if (raw.endsWith("\\") && raw.trim() !== "\\") { buf = raw.slice(0, -1).trim(); start = i + 1; }
+    else flush(i + 1, raw);
+  });
+  if (buf) flush(start, buf);
+  return lines;
+}
+
+function refreshReturnTable(preserve = {}) {
+  const box = $("returnsBox");
+  const files = collectFiles();
+  const rows = [];
+  files.forEach((f) => {
+    if (!f.name) return;
+    parseAuthModuleLines(f.content).forEach((ln) => {
+      const key = f.name + ":" + ln;
+      rows.push({ file: f.name, line: ln, value: preserve[key] || "success" });
+    });
+  });
+  box.innerHTML = rows.length ? rows.map((r, i) => `
+    <div class="retrow" data-key="${esc(r.file)}:${r.line}">
+      <input type="text" class="rt-file" value="${esc(r.file)}" spellcheck="false" title="配置文件名" />
+      <input type="text" class="rt-line" value="${r.line}" inputmode="numeric" title="物理行号" />
+      <select class="rt-ret" title="模块返回码">
+        ${RET_OPTS.map((o) => `<option value="${o}" ${o === r.value ? "selected" : ""}>${o}</option>`).join("")}
+      </select>
+      <button type="button" class="danger rt-del">×</button>
+    </div>`).join("") : `<p class="hint">尚未识别到 auth 模块行。</p>`;
+  box.querySelectorAll(".rt-del").forEach((btn) =>
+    btn.addEventListener("click", () => { btn.closest(".retrow").remove(); }));
+}
+
+function collectReturns() {
+  return Array.from($("returnsBox").querySelectorAll(".retrow")).map((row) => ({
+    file: row.querySelector(".rt-file").value.trim(),
+    line: Number(row.querySelector(".rt-line").value),
+    return: row.querySelector(".rt-ret").value,
+  }));
+}
+
+// ----------------------------------------------------------------- 示例
+async function loadExamples() {
+  const r = await fetch("/api/pam/examples");
+  const data = await r.json();
+  EXAMPLES = data.examples;
+  const sel = $("exampleSelect");
+  sel.innerHTML = EXAMPLES.map((e, i) => `<option value="${i}">${esc(e.name)}</option>`).join("");
+  sel.addEventListener("change", () => loadExample(sel.value));
+  $("loadBtn").addEventListener("click", () => loadExample(sel.value));
+  loadExample(0);
+}
+
+function loadExample(i) {
+  const ex = EXAMPLES[i];
+  $("exampleDesc").textContent = ex.description || "";
+  $("entryInput").value = ex.payload.entry;
+  $("fileBlocks").innerHTML = "";
+  ex.payload.files.forEach((f) => addFileBlock(f.name, f.content));
+  // 用示例自带返回码填表
+  refreshReturnTable();
+  const byKey = {};
+  ex.payload.returns.forEach((r) => { byKey[r.file + ":" + r.line] = r.return; });
+  $("returnsBox").querySelectorAll(".retrow").forEach((row) => {
+    const key = row.dataset.key;
+    if (byKey[key]) row.querySelector(".rt-ret").value = byKey[key];
+  });
+  $("resultPane").innerHTML = `<p class="hint">已载入「${esc(ex.name)}」，可编辑后运行分析。</p>`;
+}
+
+// ----------------------------------------------------------------- 渲染结果
+function stateHtml(st) {
+  const cls = st.impression === "positive" ? "pos" : st.impression === "negative" ? "neg" : "und";
+  return `<span class="state">impression=<span class="${cls}">${esc(st.impression)}</span> / status=<span class="${cls}">${esc(st.status)}</span></span>`;
+}
+
+function actionPill(a) {
+  const named = ["ignore", "ok", "bad", "done", "die", "reset"];
+  const cls = named.includes(a) ? "act-" + a : "";
+  return `<span class="pill ${cls}">${esc(a)}</span>`;
+}
+
+function renderStep(s, idx) {
+  let head = "", body = "";
+  if (s.kind === "module") {
+    head = `🔧 调用模块 <span class="mono">${esc(s.module)}</span> @ ${esc(s.file)}:${s.line}`;
+    body = `
+      <div class="meta">源行 ${esc(s.file)}:${s.line} — <span class="src">${esc(s.raw)}</span></div>
+      <div class="kv">
+        <span class="k">控制</span><span class="mono">${esc(s.control)}</span>
+        <span class="k">模块返回</span><span class="mono">${esc(s.module_return)}</span>
+        <span class="k">触发动作</span><span>${actionPill(s.action)}</span>
+        <span class="k">调用前状态</span><span>${stateHtml(s.state_before)}</span>
+        <span class="k">调用后状态</span><span>${stateHtml(s.state_after)}</span>
+      </div>
+      <div class="d">${esc(s.note || "")}</div>`;
+  } else if (s.kind === "substack_enter") {
+    head = `📥 进入 substack → /etc/pam.d/${esc(s.target)} @ ${esc(s.file)}:${s.line}`;
+    body = `<div class="meta">${esc(s.raw)}</div><div class="d">${esc(s.note)}</div>`;
+  } else {
+    head = `📤 子栈返回 → /etc/pam.d/${esc(s.target)}，子栈终态 ${esc(s.substack_return)} @ ${esc(s.file)}:${s.line}`;
+    body = `<div class="d">${esc(s.note)}</div><div style="margin-top:4px">${stateHtml(s.state_after)}</div>`;
+  }
+  const indent = s.level > 0 ? `style="margin-left:${s.level * 16}px"` : "";
+  return `<div class="step ${s.kind}" ${indent}>
+      <div class="t">${idx}. ${head}</div>${body}
+    </div>`;
+}
+
+function renderSkipped(skipped) {
+  if (!skipped.length) return "";
+  return `<h3 style="font-size:14px;margin:16px 0 8px">⏭ 跳过的源行（${skipped.length}）</h3>` +
+    skipped.map((s) => `
+      <div class="skip-item" style="${s.level > 0 ? `margin-left:${s.level * 16}px` : ""}">
+        <span class="mono">${esc(s.file)}:${s.line}</span>（${esc(s.kind)}）— ${esc(s.reason)}
+        <div class="meta src">${esc(s.raw)}</div>
+      </div>`).join("");
+}
+
+function renderResult(res) {
+  const ok = res.authenticated;
+  const head = `<div class="verdict ${ok ? "ok" : "bad"}">
+      <h3><span class="badge ${ok ? "ok" : "bad"}">${ok ? "认证通过 PAM_SUCCESS" : "认证失败"}</span>
+        PAM 返回码：<span class="mono">${esc(res.return_code)}</span></h3>
+      <div class="kv">
+        <span class="k">入口服务</span><span class="mono">/etc/pam.d/${esc(res.entry)}</span>
+        <span class="k">最终印象</span><span class="mono">${esc(res.final_impression)}</span>
+        <span class="k">执行步数</span><span>${res.steps.length} 步调用/进出子栈，跳过 ${res.skipped.length} 个单元</span>
+      </div>
+    </div>`;
+  let warn = "";
+  if (res.warnings && res.warnings.length) {
+    warn = `<div class="warnbox"><b>⚠ 告警</b><ul>${res.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
+  }
+  const steps = `<h3 style="font-size:14px;margin:0 0 8px">逐步骤状态（${res.steps.length}）</h3>
+    <div class="steps">${res.steps.map((s, i) => renderStep(s, i + 1)).join("")}</div>`;
+  return head + warn + steps + renderSkipped(res.skipped);
+}
+
+function renderError(err) {
+  return `<div class="errbox">
+      <h3 style="margin:0 0 6px">❌ 输入被拒绝（未执行分析，旧结果已清空）</h3>
+      <div>${esc(err.message)}</div>
+      <div class="loc" style="margin-top:6px">定位：${esc(err.loc_text || "$")}</div>
+    </div>`;
+}
+
+// ----------------------------------------------------------------- 运行
+$("runBtn").addEventListener("click", async () => {
+  const payload = {
+    entry: $("entryInput").value.trim(),
+    files: collectFiles(),
+    returns: collectReturns(),
+  };
+  // 前端行数硬约束，提前拦截
+  const tooLong = payload.files.find((f) => f.content.split("\n").length > MAX_LINES);
+  if (tooLong) {
+    $("resultPane").innerHTML = renderError({
+      message: `配置 ${tooLong.name || "(未命名)"} 超过 ${MAX_LINES} 行上限`, loc_text: "$.files[*].content",
+    });
+    return;
+  }
+  if (payload.files.length > MAX_FILES) {
+    $("resultPane").innerHTML = renderError({ message: `最多 ${MAX_FILES} 份配置`, loc_text: "$.files" });
+    return;
+  }
+  $("resultPane").innerHTML = `<p class="hint">分析中…</p>`;
+  try {
+    const r = await fetch("/api/pam/analyze", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    // 任何拒绝都覆盖（清除）旧结果
+    $("resultPane").innerHTML = data.ok ? renderResult(data.result) : renderError(data);
+  } catch (e) {
+    $("resultPane").innerHTML = renderError({ message: "请求失败：" + e.message, loc_text: "$" });
+  }
+});
+
+$("addFileBtn").addEventListener("click", () => addFileBlock());
+$("scanBtn").addEventListener("click", () => {
+  const preserve = {};
+  $("returnsBox").querySelectorAll(".retrow").forEach((row) => {
+    preserve[row.dataset.key] = row.querySelector(".rt-ret").value;
+  });
+  refreshReturnTable(preserve);
+});
+
+loadExamples();
+</script>
+</body>
+</html>
